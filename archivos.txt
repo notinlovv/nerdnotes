@@ -1,0 +1,7 @@
+notas/
+├── __init__.py
+├── main.py           # Punto de entrada, CLI
+├── core.py           # Lógica principal
+├── storage.py        # Operaciones con archivos
+├── editor.py         # Interacción con el editor
+└── config.py         # Configuración (directorio, editor, etc.)

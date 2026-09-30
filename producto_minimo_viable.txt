@@ -1,0 +1,16 @@
+1. CREAR nota nueva → abrir editor, guardar en archivo
+2. LISTAR notas existentes → ver títulos y fechas
+3. VER contenido de una nota → mostrar en terminal
+4. EDITAR nota existente → abrir en el editor
+5. ELIMINAR nota → con confirmación
+
+~/.notas/                          # Directorio oculto en home
+├── 2026-09-07_mi_idea.txt        # Formato: YYYY-MM-DD_titulo.txt
+├── 2026-09-06_proyecto.txt
+└── 2026-09-05_recetas.txt
+
+notas (script principal)
+├── Parser de argumentos (argparse)
+├── Gestor de archivos (crear, leer, escribir, eliminar)
+├── Editor integrado (abrir $EDITOR)
+└── Formateador de salida (mostrar bonito en terminal)
