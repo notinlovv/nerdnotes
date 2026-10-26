@@ -11,8 +11,11 @@ def crear_nueva_nota(titulo: Optional[str] = None) -> None:
             return
 
     ruta = storage.crear_nota(titulo)
-    print(f"Nota creada: {ruta.name}")
+    if not ruta:
+        print("No se pudo crear la nota.")
+        return
 
+    print(f"Nota creada: {ruta.name}")
     editor.abrir_editor(ruta)
 
 def listar_todas_notas() -> None:
@@ -39,7 +42,6 @@ def mostrar_nota(indice: int) -> None:
         return
 
     contenido = storage.leer_nota(ruta)
-    titulo, fecha = storage.obtener_metadatos(ruta)
 
     print("\n" + "=" * 60)
     print(contenido)
@@ -54,16 +56,24 @@ def editar_nota_existente(indice: int) -> None:
     editor.editar_nota(ruta) 
     print(f"Nota actualizada")
 
-def eliminar_nota_existente(indice: int) -> None:
+def eliminar_nota_existente(indice: int, permanente: bool = False) -> None:
     ruta = storage.obtener_ruta_por_indice(indice)
     if not ruta:
         print(f"Nota #{indice} no encontrada")
         return
 
     titulo, _ = storage.obtener_metadatos(ruta)
-    confirmacion = input(f"Desea eliminar '{titulo}'? [s/N]").lower()
-    if confirmacion in ('s', 'si', 'sí'):
-        storage.eliminar_nota(ruta)
-        print(f"Nota eliminada")
+    if permanente:
+        confirmacion = input(f"¿Desea eliminar permanentemente '{titulo}'? [s/N]: ").lower()
+        if confirmacion in ('s', 'si', 'sí'):
+            storage.eliminar_nota(ruta)
+            print("Nota eliminada permanentemente")
+        else:
+            print("Operacion cancelada")
     else:
-        print("Operacion cancelada")
+        confirmacion = input(f"¿Desea mover a la papelera '{titulo}'? [s/N]: ").lower()
+        if confirmacion in ('s', 'si', 'sí'):
+            storage.mover_a_papelera(ruta)
+            print("Nota movida a la papelera")
+        else:
+            print("Operacion cancelada")

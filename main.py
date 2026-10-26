@@ -31,8 +31,9 @@ def configurar_parser() -> argparse.ArgumentParser:
     parser_edit.add_argument('indice', type=int, help='Índice de la nota (ver list)')
     
     # delete - Eliminar nota
-    parser_delete = subparsers.add_parser('delete', aliases=['del', 'rm'], help='Eliminar una nota')
+    parser_delete = subparsers.add_parser('delete', aliases=['del', 'rm'], help='Eliminar una nota (mueve a la papelera por defecto)')
     parser_delete.add_argument('indice', type=int, help='Índice de la nota (ver list)')
+    parser_delete.add_argument('--permanente', '-p', action='store_true', help='Eliminar permanentemente en vez de mover a la papelera')
     
     # version - Mostrar versión
     parser_version = subparsers.add_parser('version', help='Mostrar versión')
@@ -61,11 +62,11 @@ def main():
         core.editar_nota_existente(args.indice)
     
     elif args.comando in ('delete', 'del', 'rm'):
-        core.eliminar_nota_existente(args.indice)
+        core.eliminar_nota_existente(args.indice, permanente=args.permanente)
     
     elif args.comando == 'version':
         print("NerdNotes v0.1.0")
-        print("Hecho con para terminales")
+        print("Hecho con ❤️ para terminales")
     
     else:
         parser.print_help()
