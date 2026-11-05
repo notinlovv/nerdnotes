@@ -27,7 +27,7 @@ from ui.notes_model import NoteItem, NoteRoles, NotesListModel, NotesFilterProxy
 from ui.notes_list_view import NotesListView
 from ui.search_worker import SearchWorker
 from ui.tag_dialogs import MultiCompleterLineEdit, EditarEtiquetasDialog, NuevaNotaDialog
-from editor import NoteEditor, NoteTitleEdit
+from editor import NoteEditor, NoteTitleEdit, NoteFormatToolbar
 
 class NerdNotesApp(QMainWindow):
     solicitar_busqueda = pyqtSignal(list, str, object, int)  # (notas, query, tag_filtro, query_id)
@@ -260,6 +260,12 @@ class NerdNotesApp(QMainWindow):
         layout_header_editor.setContentsMargins(16, 0, 16, 0)
         layout_header_editor.setSpacing(4)
 
+        self.btn_pin = QPushButton()
+        self.btn_pin.setObjectName("btn_icon")
+        self.btn_pin.setCheckable(True)
+        self.btn_pin.setToolTip("Fijar nota arriba")
+        self.btn_pin.clicked.connect(self._toggle_pin_actual)
+
         self.btn_preview = QPushButton()
         self.btn_preview.setObjectName("btn_icon")
         self.btn_preview.setCheckable(True)
@@ -277,6 +283,7 @@ class NerdNotesApp(QMainWindow):
         self.btn_eliminar.clicked.connect(self.eliminar_nota_seleccionada)
 
         layout_header_editor.addStretch()
+        layout_header_editor.addWidget(self.btn_pin)
         layout_header_editor.addWidget(self.btn_preview)
         layout_header_editor.addWidget(self.btn_exportar)
         layout_header_editor.addWidget(self.btn_eliminar)
@@ -299,9 +306,25 @@ class NerdNotesApp(QMainWindow):
         self.lbl_titulo_actual = NoteTitleEdit()
         self.lbl_titulo_actual.editingFinished.connect(self._al_editar_titulo_nota)
 
-        # Barra sutil de metadatos (fecha de modificación y etiquetas)
+        # Barra sutil de metadatos (fecha de modificación, etiquetas y botón de gestión rápida)
+        self.widget_metadata = QWidget()
+        self.widget_metadata.setObjectName("widget_metadata")
+        layout_metadata = QHBoxLayout(self.widget_metadata)
+        layout_metadata.setContentsMargins(0, 2, 0, 4)
+        layout_metadata.setSpacing(8)
+
         self.lbl_metadata_nota = QLabel("")
         self.lbl_metadata_nota.setObjectName("lbl_metadata_nota")
+
+        self.btn_etiquetas = QPushButton("+ Etiqueta")
+        self.btn_etiquetas.setObjectName("btn_tag_rapido")
+        self.btn_etiquetas.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_etiquetas.setToolTip("Gestionar etiquetas de la nota actual")
+        self.btn_etiquetas.clicked.connect(self._gestionar_etiquetas_rapido)
+
+        layout_metadata.addWidget(self.lbl_metadata_nota)
+        layout_metadata.addWidget(self.btn_etiquetas)
+        layout_metadata.addStretch(1)
 
         # Área de edición
         self.editor_texto = NoteEditor(callback_guardar=lambda contenido: self.guardar_nota(silencioso=True), intervalo_ms=500)
@@ -313,8 +336,12 @@ class NerdNotesApp(QMainWindow):
         self.editor_texto.textChanged.connect(self.al_modificar_texto)
         self.editor_texto.ha_cambiado.connect(self._al_cambiar_dirty_state)
 
+        # Barra de formato Markdown
+        self.toolbar_formato = NoteFormatToolbar(self.editor_texto)
+
         layout_doc.addWidget(self.lbl_titulo_actual)
-        layout_doc.addWidget(self.lbl_metadata_nota)
+        layout_doc.addWidget(self.widget_metadata)
+        layout_doc.addWidget(self.toolbar_formato)
         layout_doc.addWidget(self.editor_texto, 1)
 
         layout_editor_body.addStretch(1)
@@ -445,15 +472,16 @@ class NerdNotesApp(QMainWindow):
         QShortcut(QKeySequence("Ctrl+Shift+P"), self, self.alternar_vista_previa)
         # Ctrl+T para cambiar de tema
         QShortcut(QKeySequence("Ctrl+T"), self, self.cambiar_tema_con_animacion)
-        # Ctrl+\ y Ctrl+B para colapsar/expandir barra lateral
+        # Ctrl+\ y Ctrl+B para colapsar/expandir barra lateral (o negrita si el editor tiene el foco)
         QShortcut(QKeySequence("Ctrl+\\"), self, self.animar_sidebar)
-        QShortcut(QKeySequence("Ctrl+B"), self, self.animar_sidebar)
+        QShortcut(QKeySequence("Ctrl+B"), self, self._atajo_ctrl_b)
 
         # Esc en el buscador para limpiar y enfocar lista o editor
         QShortcut(QKeySequence("Esc"), self.buscador, self._escape_buscador)
         
         # Formato Markdown sobre selección o palabra actual (manteniendo undo/redo)
         QShortcut(QKeySequence("Ctrl+I"), self, lambda: self.aplicar_formato_markdown("cursiva"))
+        QShortcut(QKeySequence("Ctrl+K"), self, lambda: self.aplicar_formato_markdown("enlace"))
         QShortcut(QKeySequence("Ctrl+1"), self, lambda: self.aplicar_formato_markdown("h1"))
         QShortcut(QKeySequence("Ctrl+2"), self, lambda: self.aplicar_formato_markdown("h2"))
         QShortcut(QKeySequence("Ctrl+3"), self, lambda: self.aplicar_formato_markdown("h3"))
@@ -494,108 +522,18 @@ class NerdNotesApp(QMainWindow):
                 return True
         return super().eventFilter(obj, event)
 
+    def _atajo_ctrl_b(self):
+        if hasattr(self, "editor_texto") and self.editor_texto.hasFocus() and not self.modo_preview and not self.editor_texto.isReadOnly():
+            self.aplicar_formato_markdown("negrita")
+        else:
+            self.animar_sidebar()
+
     # --- FORMATO MARKDOWN EN EL EDITOR ---
     def aplicar_formato_markdown(self, tipo: str):
         if self.modo_preview or self.editor_texto.isReadOnly():
             return
-
-        cursor = self.editor_texto.textCursor()
-        cursor.beginEditBlock()
-        try:
-            if tipo in ("negrita", "cursiva"):
-                simbolo = "**" if tipo == "negrita" else "*"
-                len_simbolo = len(simbolo)
-
-                if not cursor.hasSelection():
-                    cursor.select(QTextCursor.SelectionType.WordUnderCursor)
-
-                if cursor.hasSelection():
-                    sel_text = cursor.selectedText()
-                    start_sel = cursor.selectionStart()
-                    if sel_text.startswith(simbolo) and sel_text.endswith(simbolo) and len(sel_text) >= 2 * len_simbolo:
-                        nuevo_texto = sel_text[len_simbolo:-len_simbolo]
-                    else:
-                        nuevo_texto = f"{simbolo}{sel_text}{simbolo}"
-                    cursor.insertText(nuevo_texto)
-                    cursor.setPosition(start_sel)
-                    cursor.setPosition(start_sel + len(nuevo_texto), QTextCursor.MoveMode.KeepAnchor)
-                else:
-                    pos = cursor.position()
-                    cursor.insertText(f"{simbolo}{simbolo}")
-                    cursor.setPosition(pos + len_simbolo)
-                    self.editor_texto.setTextCursor(cursor)
-                    return
-
-            elif tipo in ("h1", "h2", "h3"):
-                prefijo = {"h1": "# ", "h2": "## ", "h3": "### "}[tipo]
-                start = cursor.selectionStart()
-                end = cursor.selectionEnd()
-
-                cursor.setPosition(start)
-                cursor.movePosition(QTextCursor.MoveOperation.StartOfLine)
-                start_pos = cursor.position()
-
-                cursor.setPosition(end)
-                cursor.movePosition(QTextCursor.MoveOperation.EndOfLine)
-                end_pos = cursor.position()
-
-                cursor.setPosition(start_pos)
-                cursor.setPosition(end_pos, QTextCursor.MoveMode.KeepAnchor)
-
-                bloque = cursor.selectedText()
-                lineas = bloque.split("\u2029")
-                nuevas = []
-                for lin in lineas:
-                    lin_limpia = re.sub(r"^#{1,6}\s*", "", lin)
-                    if lin.startswith(prefijo):
-                        nuevas.append(lin_limpia)
-                    else:
-                        nuevas.append(prefijo + lin_limpia)
-                texto_insertado = "\n".join(nuevas)
-                cursor.insertText(texto_insertado)
-                cursor.setPosition(start_pos)
-                cursor.setPosition(start_pos + len(texto_insertado), QTextCursor.MoveMode.KeepAnchor)
-
-            elif tipo in ("lista", "checklist"):
-                start = cursor.selectionStart()
-                end = cursor.selectionEnd()
-
-                cursor.setPosition(start)
-                cursor.movePosition(QTextCursor.MoveOperation.StartOfLine)
-                start_pos = cursor.position()
-
-                cursor.setPosition(end)
-                cursor.movePosition(QTextCursor.MoveOperation.EndOfLine)
-                end_pos = cursor.position()
-
-                cursor.setPosition(start_pos)
-                cursor.setPosition(end_pos, QTextCursor.MoveMode.KeepAnchor)
-
-                bloque = cursor.selectedText()
-                lineas = bloque.split("\u2029")
-                nuevas = []
-                for lin in lineas:
-                    if tipo == "lista":
-                        if re.match(r"^-\s*\[[ xX]\]\s*", lin):
-                            nuevas.append("- " + re.sub(r"^-\s*\[[ xX]\]\s*", "", lin))
-                        elif lin.startswith("- "):
-                            nuevas.append(lin[2:])
-                        else:
-                            nuevas.append("- " + lin)
-                    else:  # checklist
-                        if re.match(r"^-\s*\[[ xX]\]\s*", lin):
-                            nuevas.append(re.sub(r"^-\s*\[[ xX]\]\s*", "", lin))
-                        elif lin.startswith("- "):
-                            nuevas.append("- [ ] " + lin[2:])
-                        else:
-                            nuevas.append("- [ ] " + lin)
-                texto_insertado = "\n".join(nuevas)
-                cursor.insertText(texto_insertado)
-                cursor.setPosition(start_pos)
-                cursor.setPosition(start_pos + len(texto_insertado), QTextCursor.MoveMode.KeepAnchor)
-        finally:
-            cursor.endEditBlock()
-            self.editor_texto.setTextCursor(cursor)
+        if hasattr(self.editor_texto, "aplicar_formato"):
+            self.editor_texto.aplicar_formato(tipo)
 
     # --- FILE SYSTEM WATCHER SOBRE NOTES_DIR ---
     def _iniciar_file_watcher(self):
@@ -650,10 +588,14 @@ class NerdNotesApp(QMainWindow):
                 print(f"Error al cargar QSS {nombre_qss}: {e}")
 
         self.lista_notas.set_tema(tema)
+        if hasattr(self, "editor_texto") and hasattr(self.editor_texto, "set_tema"):
+            self.editor_texto.set_tema(tema)
         self._actualizar_iconos()
 
     def _actualizar_iconos(self):
         t = self.tema_actual
+        if hasattr(self, "btn_pin"):
+            self.btn_pin.setIcon(get_icon("pin", t))
         self.btn_tema.setIcon(get_icon("theme", t))
         self.btn_toggle_sidebar.setIcon(get_icon("sidebar", t))
         self.btn_nueva.setIcon(get_icon("new", t))
@@ -917,7 +859,15 @@ class NerdNotesApp(QMainWindow):
         self.lbl_titulo_actual.setReadOnly(True)
         if hasattr(self, "lbl_metadata_nota"):
             self.lbl_metadata_nota.setText("")
+        if hasattr(self, "btn_etiquetas"):
+            self.btn_etiquetas.setEnabled(False)
+            self.btn_etiquetas.setVisible(False)
+        if hasattr(self, "toolbar_formato"):
+            self.toolbar_formato.setEnabled(False)
         self.lbl_contador.setText("0 palabras | 0 caracteres")
+        if hasattr(self, "btn_pin"):
+            self.btn_pin.setEnabled(False)
+            self.btn_pin.setChecked(False)
         self.btn_preview.setEnabled(False)
         self.btn_preview.setChecked(False)
         self.btn_exportar.setEnabled(False)
@@ -1078,23 +1028,19 @@ class NerdNotesApp(QMainWindow):
         self.lbl_titulo_actual.setEnabled(True)
         self.lbl_titulo_actual.setReadOnly(es_papelera or self.modo_preview)
 
-        # Actualizar barra sutil de metadatos
-        partes_meta = []
-        try:
-            import datetime
-            mtime = self.ruta_actual.stat().st_mtime
-            fecha_str = datetime.datetime.fromtimestamp(mtime).strftime("%d/%m/%Y %H:%M")
-            partes_meta.append(f"Modificado: {fecha_str}")
-        except Exception:
-            pass
-        etiquetas = storage.extraer_etiquetas(contenido)
-        if etiquetas:
-            partes_meta.append(f"Etiquetas: {', '.join(etiquetas)}")
-        if hasattr(self, "lbl_metadata_nota"):
-            self.lbl_metadata_nota.setText("  •  ".join(partes_meta) if partes_meta else "")
+        es_fijada = storage.es_nota_fijada(self.ruta_actual.name) if self.ruta_actual else False
+        if hasattr(self, "btn_pin"):
+            self.btn_pin.setEnabled(not es_papelera)
+            self.btn_pin.setChecked(es_fijada)
+            self.btn_pin.setToolTip("Desfijar nota" if es_fijada else "Fijar nota arriba")
+
+        self._actualizar_metadatos_actuales()
 
         self.editor_texto.setEnabled(True)
         self.editor_texto.setPlaceholderText("")
+        if hasattr(self, "toolbar_formato"):
+            self.toolbar_formato.setEnabled(not es_papelera)
+            self.toolbar_formato.setVisible(not self.modo_preview and not es_papelera)
         self.btn_preview.setEnabled(not es_papelera)
         self.btn_exportar.setEnabled(True)
         self.btn_eliminar.setEnabled(not es_papelera)
@@ -1128,6 +1074,51 @@ class NerdNotesApp(QMainWindow):
             cursor = self.editor_texto.textCursor()
             cursor.movePosition(QTextCursor.MoveOperation.End)
             self.editor_texto.setTextCursor(cursor)
+
+    # Aliases para compatibilidad de interfaz
+    mostrar_nota = mostrar_contenido
+    cargar_nota_por_ruta = mostrar_contenido
+
+    def _actualizar_metadatos_actuales(self):
+        if not self.ruta_actual or not self.ruta_actual.exists():
+            if hasattr(self, "lbl_metadata_nota"):
+                self.lbl_metadata_nota.setText("")
+            if hasattr(self, "btn_etiquetas"):
+                self.btn_etiquetas.setEnabled(False)
+                self.btn_etiquetas.setVisible(False)
+            return
+
+        es_papelera = (self.filtro_categoria == "papelera")
+        partes_meta = []
+        try:
+            import datetime
+            mtime = self.ruta_actual.stat().st_mtime
+            fecha_str = datetime.datetime.fromtimestamp(mtime).strftime("%d/%m/%Y %H:%M")
+            partes_meta.append(f"Modificado: {fecha_str}")
+        except Exception:
+            pass
+
+        contenido = self.editor_texto.toPlainText() if hasattr(self, "editor_texto") else ""
+        if not contenido and self.ruta_actual.exists():
+            try:
+                contenido = storage.leer_nota(self.ruta_actual)
+            except Exception:
+                contenido = ""
+        etiquetas = storage.extraer_etiquetas(contenido)
+        if etiquetas:
+            partes_meta.append(f"Etiquetas: {', '.join(etiquetas)}")
+
+        if hasattr(self, "lbl_metadata_nota"):
+            self.lbl_metadata_nota.setText("  •  ".join(partes_meta) if partes_meta else "")
+        if hasattr(self, "btn_etiquetas"):
+            self.btn_etiquetas.setEnabled(not es_papelera)
+            self.btn_etiquetas.setVisible(not es_papelera)
+
+    def _gestionar_etiquetas_rapido(self):
+        if not self.ruta_actual or (self.filtro_categoria == "papelera"):
+            return
+        self.editar_etiquetas_nota(self.ruta_actual)
+        self._actualizar_metadatos_actuales()
 
     def _al_editar_titulo_nota(self):
         if not self.ruta_actual or self.filtro_categoria == "papelera" or self.modo_preview:
@@ -1577,6 +1568,8 @@ class NerdNotesApp(QMainWindow):
             self.editor_texto.setMarkdown(contenido)
             self.editor_texto.setReadOnly(True)
             self._cargando_texto = False
+            if hasattr(self, "toolbar_formato"):
+                self.toolbar_formato.setVisible(False)
             
             self.statusBar().showMessage("Vista previa Markdown activada", 2500)
         else:
@@ -1590,6 +1583,8 @@ class NerdNotesApp(QMainWindow):
             self.editor_texto.setReadOnly(False)
             self._cargando_texto = False
             self.modificado = False
+            if hasattr(self, "toolbar_formato"):
+                self.toolbar_formato.setVisible(True)
             
             self.statusBar().showMessage("Modo edición activado", 2500)
 
@@ -1685,9 +1680,19 @@ class NerdNotesApp(QMainWindow):
 
     def _toggle_pin(self, ruta: Path, fijar: bool):
         storage.fijar_nota(ruta.name, fijar=fijar)
+        if self.ruta_actual and self.ruta_actual.name == ruta.name:
+            if hasattr(self, "btn_pin"):
+                self.btn_pin.setChecked(fijar)
+                self.btn_pin.setToolTip("Desfijar nota" if fijar else "Fijar nota arriba")
         self.cargar_lista_notas(seleccionar_ruta=self.ruta_actual)
         msg = "Nota fijada arriba." if fijar else "Nota desfijada."
         self.statusBar().showMessage(msg, 2500)
+
+    def _toggle_pin_actual(self):
+        if not self.ruta_actual or (self.filtro_categoria == "papelera"):
+            return
+        es_fijada = storage.es_nota_fijada(self.ruta_actual.name)
+        self._toggle_pin(self.ruta_actual, not es_fijada)
 
     # --- EVENTO DE CIERRE ---
     def closeEvent(self, event):
