@@ -27,7 +27,7 @@ from ui.notes_model import NoteItem, NoteRoles, NotesListModel, NotesFilterProxy
 from ui.notes_list_view import NotesListView
 from ui.search_worker import SearchWorker
 from ui.tag_dialogs import MultiCompleterLineEdit, EditarEtiquetasDialog, NuevaNotaDialog
-from editor import NoteEditor
+from editor import NoteEditor, NoteTitleEdit
 
 class NerdNotesApp(QMainWindow):
     solicitar_busqueda = pyqtSignal(list, str, object, int)  # (notas, query, tag_filtro, query_id)
@@ -78,7 +78,7 @@ class NerdNotesApp(QMainWindow):
 
         # --- CONSTRUCCIÓN DEL LAYOUT DE TRES PANELES (QSplitter) ---
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.splitter.setHandleWidth(2)
+        self.splitter.setHandleWidth(1)
 
         # ==============================================================
         # PANEL 1: BARRA LATERAL (Categorías, Etiquetas, Papelera)
@@ -86,11 +86,17 @@ class NerdNotesApp(QMainWindow):
         self.widget_sidebar = QWidget()
         self.widget_sidebar.setObjectName("widget_sidebar")
         layout_sidebar = QVBoxLayout(self.widget_sidebar)
-        layout_sidebar.setContentsMargins(10, 12, 10, 10)
-        layout_sidebar.setSpacing(8)
+        layout_sidebar.setContentsMargins(0, 0, 0, 0)
+        layout_sidebar.setSpacing(0)
 
-        # Encabezado de la barra lateral con Logo y botón de Tema
-        layout_sidebar_header = QHBoxLayout()
+        # Cabecera fija de 44px
+        self.header_sidebar = QWidget()
+        self.header_sidebar.setObjectName("header_panel")
+        self.header_sidebar.setFixedHeight(44)
+        layout_header_sidebar = QHBoxLayout(self.header_sidebar)
+        layout_header_sidebar.setContentsMargins(14, 0, 10, 0)
+        layout_header_sidebar.setSpacing(6)
+
         lbl_app = QLabel("NerdNotes")
         lbl_app.setObjectName("lbl_app_logo")
         self.btn_tema = QPushButton()
@@ -98,9 +104,15 @@ class NerdNotesApp(QMainWindow):
         self.btn_tema.setToolTip("Cambiar tema claro/oscuro (Ctrl+T)")
         self.btn_tema.clicked.connect(self.cambiar_tema_con_animacion)
 
-        layout_sidebar_header.addWidget(lbl_app, 1)
-        layout_sidebar_header.addWidget(self.btn_tema)
-        layout_sidebar.addLayout(layout_sidebar_header)
+        layout_header_sidebar.addWidget(lbl_app, 1)
+        layout_header_sidebar.addWidget(self.btn_tema)
+        layout_sidebar.addWidget(self.header_sidebar)
+
+        # Contenedor del cuerpo de la barra lateral
+        body_sidebar = QWidget()
+        layout_body_sidebar = QVBoxLayout(body_sidebar)
+        layout_body_sidebar.setContentsMargins(10, 10, 10, 10)
+        layout_body_sidebar.setSpacing(8)
 
         # Lista de Navegación de la barra lateral
         self.nav_list = QListWidget()
@@ -116,19 +128,21 @@ class NerdNotesApp(QMainWindow):
         self.nav_list.addItem(self.item_nav_papelera)
         self.nav_list.setCurrentRow(0)
         self.nav_list.currentRowChanged.connect(self._al_cambiar_categoria_nav)
-        layout_sidebar.addWidget(self.nav_list)
+        layout_body_sidebar.addWidget(self.nav_list)
 
         # Separador / Título de Etiquetas
         lbl_etiquetas_seccion = QLabel("ETIQUETAS")
         lbl_etiquetas_seccion.setObjectName("lbl_seccion")
-        layout_sidebar.addWidget(lbl_etiquetas_seccion)
+        layout_body_sidebar.addWidget(lbl_etiquetas_seccion)
 
         # Lista de Etiquetas
         self.tags_list = QListWidget()
         self.tags_list.setObjectName("tags_list")
         self.tags_list.setSpacing(2)
         self.tags_list.itemClicked.connect(self._al_clickear_etiqueta_nav)
-        layout_sidebar.addWidget(self.tags_list, 1)
+        layout_body_sidebar.addWidget(self.tags_list, 1)
+
+        layout_sidebar.addWidget(body_sidebar, 1)
 
         # ==============================================================
         # PANEL 2: LISTA DE NOTAS (Título, Vista previa, Fecha)
@@ -136,12 +150,16 @@ class NerdNotesApp(QMainWindow):
         self.widget_lista = QWidget()
         self.widget_lista.setObjectName("widget_lista")
         layout_lista = QVBoxLayout(self.widget_lista)
-        layout_lista.setContentsMargins(10, 10, 10, 10)
-        layout_lista.setSpacing(8)
+        layout_lista.setContentsMargins(0, 0, 0, 0)
+        layout_lista.setSpacing(0)
 
-        # Barra de herramientas superior de la lista
-        layout_herramientas_lista = QHBoxLayout()
-        layout_herramientas_lista.setSpacing(6)
+        # Cabecera fija de 44px
+        self.header_lista = QWidget()
+        self.header_lista.setObjectName("header_panel")
+        self.header_lista.setFixedHeight(44)
+        layout_header_lista = QHBoxLayout(self.header_lista)
+        layout_header_lista.setContentsMargins(10, 0, 10, 0)
+        layout_header_lista.setSpacing(4)
 
         self.btn_toggle_sidebar = QPushButton()
         self.btn_toggle_sidebar.setObjectName("btn_icon")
@@ -184,21 +202,26 @@ class NerdNotesApp(QMainWindow):
         self.combo_orden.setCurrentIndex(orden_guardado)
         self.combo_orden.currentIndexChanged.connect(self.al_cambiar_orden)
 
-        layout_herramientas_lista.addWidget(self.btn_toggle_sidebar)
-        layout_herramientas_lista.addWidget(self.btn_nueva)
-        layout_herramientas_lista.addWidget(self.btn_importar)
-        layout_herramientas_lista.addWidget(self.btn_restaurar)
-        layout_herramientas_lista.addWidget(self.btn_vaciar_papelera)
-        layout_herramientas_lista.addStretch()
-        layout_herramientas_lista.addWidget(self.combo_orden)
-        layout_lista.addLayout(layout_herramientas_lista)
+        layout_header_lista.addWidget(self.btn_toggle_sidebar)
+        layout_header_lista.addWidget(self.btn_nueva)
+        layout_header_lista.addWidget(self.btn_importar)
+        layout_header_lista.addWidget(self.btn_restaurar)
+        layout_header_lista.addWidget(self.btn_vaciar_papelera)
+        layout_header_lista.addStretch()
+        layout_header_lista.addWidget(self.combo_orden)
+        layout_lista.addWidget(self.header_lista)
 
-        # Buscador en tiempo real
+        # Contenedor del buscador integrado debajo de la cabecera
+        search_container = QWidget()
+        layout_search = QVBoxLayout(search_container)
+        layout_search.setContentsMargins(10, 8, 10, 6)
+        layout_search.setSpacing(0)
         self.buscador = QLineEdit()
         self.buscador.setPlaceholderText("Buscar título o contenido (Ctrl+F)...")
         self.buscador.textChanged.connect(self.al_cambiar_busqueda)
         self.buscador.installEventFilter(self)
-        layout_lista.addWidget(self.buscador)
+        layout_search.addWidget(self.buscador)
+        layout_lista.addWidget(search_container)
 
         # QListView personalizada con modelo propio y proxy para filtrado instantáneo
         self.notes_model = NotesListModel([], self)
@@ -212,7 +235,13 @@ class NerdNotesApp(QMainWindow):
         self.lista_notas.customContextMenuRequested.connect(self.mostrar_menu_contextual)
         self.lista_notas.currentItemChanged.connect(self._al_cambiar_seleccion_lista)
         self.lista_notas.clicked.connect(self._al_clickear_lista)
-        layout_lista.addWidget(self.lista_notas, 1)
+
+        list_container = QWidget()
+        layout_list_container = QVBoxLayout(list_container)
+        layout_list_container.setContentsMargins(6, 0, 6, 8)
+        layout_list_container.setSpacing(0)
+        layout_list_container.addWidget(self.lista_notas, 1)
+        layout_lista.addWidget(list_container, 1)
 
         # ==============================================================
         # PANEL 3: EDITOR DE TEXTO
@@ -220,14 +249,17 @@ class NerdNotesApp(QMainWindow):
         self.widget_editor = QWidget()
         self.widget_editor.setObjectName("widget_editor")
         layout_editor = QVBoxLayout(self.widget_editor)
-        layout_editor.setContentsMargins(12, 10, 12, 10)
-        layout_editor.setSpacing(6)
+        layout_editor.setContentsMargins(0, 0, 0, 0)
+        layout_editor.setSpacing(0)
 
-        # Barra superior del editor
-        layout_herramientas_editor = QHBoxLayout()
-        self.lbl_titulo_actual = QLabel("Sin nota seleccionada")
-        self.lbl_titulo_actual.setObjectName("lbl_titulo_actual")
-        
+        # Cabecera fija de 44px
+        self.header_editor = QWidget()
+        self.header_editor.setObjectName("header_panel")
+        self.header_editor.setFixedHeight(44)
+        layout_header_editor = QHBoxLayout(self.header_editor)
+        layout_header_editor.setContentsMargins(16, 0, 16, 0)
+        layout_header_editor.setSpacing(4)
+
         self.btn_preview = QPushButton()
         self.btn_preview.setObjectName("btn_icon")
         self.btn_preview.setCheckable(True)
@@ -244,11 +276,32 @@ class NerdNotesApp(QMainWindow):
         self.btn_eliminar.setToolTip("Mover a papelera (Del)")
         self.btn_eliminar.clicked.connect(self.eliminar_nota_seleccionada)
 
-        layout_herramientas_editor.addWidget(self.lbl_titulo_actual, 1)
-        layout_herramientas_editor.addWidget(self.btn_preview)
-        layout_herramientas_editor.addWidget(self.btn_exportar)
-        layout_herramientas_editor.addWidget(self.btn_eliminar)
-        layout_editor.addLayout(layout_herramientas_editor)
+        layout_header_editor.addStretch()
+        layout_header_editor.addWidget(self.btn_preview)
+        layout_header_editor.addWidget(self.btn_exportar)
+        layout_header_editor.addWidget(self.btn_eliminar)
+        layout_editor.addWidget(self.header_editor)
+
+        # Área de documento centrada con ancho máximo (~800px)
+        editor_body = QWidget()
+        layout_editor_body = QHBoxLayout(editor_body)
+        layout_editor_body.setContentsMargins(0, 0, 0, 0)
+        layout_editor_body.setSpacing(0)
+
+        container_doc = QWidget()
+        container_doc.setObjectName("container_documento")
+        container_doc.setMaximumWidth(800)
+        layout_doc = QVBoxLayout(container_doc)
+        layout_doc.setContentsMargins(28, 18, 28, 16)
+        layout_doc.setSpacing(2)
+
+        # Campo de título grande H1 (QLineEdit plano)
+        self.lbl_titulo_actual = NoteTitleEdit()
+        self.lbl_titulo_actual.editingFinished.connect(self._al_editar_titulo_nota)
+
+        # Barra sutil de metadatos (fecha de modificación y etiquetas)
+        self.lbl_metadata_nota = QLabel("")
+        self.lbl_metadata_nota.setObjectName("lbl_metadata_nota")
 
         # Área de edición
         self.editor_texto = NoteEditor(callback_guardar=lambda contenido: self.guardar_nota(silencioso=True), intervalo_ms=500)
@@ -259,11 +312,26 @@ class NerdNotesApp(QMainWindow):
         self._aplicar_tamano_fuente(self.font_size)
         self.editor_texto.textChanged.connect(self.al_modificar_texto)
         self.editor_texto.ha_cambiado.connect(self._al_cambiar_dirty_state)
-        layout_editor.addWidget(self.editor_texto, 1)
 
-        # Configurar tamaños mínimos para evitar colapso a ancho 0
-        self.widget_sidebar.setMinimumWidth(160)
-        self.widget_lista.setMinimumWidth(220)
+        layout_doc.addWidget(self.lbl_titulo_actual)
+        layout_doc.addWidget(self.lbl_metadata_nota)
+        layout_doc.addWidget(self.editor_texto, 1)
+
+        layout_editor_body.addStretch(1)
+        layout_editor_body.addWidget(container_doc, 10)
+        layout_editor_body.addStretch(1)
+        layout_editor.addWidget(editor_body, 1)
+
+        # Configurar tamaños mínimos y máximos según proporciones estrictas
+        # Panel 0 (Sidebar): [180px, 260px]
+        self.widget_sidebar.setMinimumWidth(180)
+        self.widget_sidebar.setMaximumWidth(260)
+
+        # Panel 1 (Lista): [260px, 360px]
+        self.widget_lista.setMinimumWidth(260)
+        self.widget_lista.setMaximumWidth(360)
+
+        # Panel 2 (Editor): absorbe todo el ancho restante [300px, inf]
         self.widget_editor.setMinimumWidth(300)
         self.editor_texto.setMinimumWidth(250)
 
@@ -271,21 +339,30 @@ class NerdNotesApp(QMainWindow):
         self.splitter.addWidget(self.widget_sidebar)
         self.splitter.addWidget(self.widget_lista)
         self.splitter.addWidget(self.widget_editor)
-        self.splitter.setCollapsible(0, True)   # Solo la barra lateral puede colapsarse
+
+        # Factores de estiramiento: Sidebar(0), Lista(0), Editor(1 -> absorbe todo el ancho)
+        self.splitter.setStretchFactor(0, 0)
+        self.splitter.setStretchFactor(1, 0)
+        self.splitter.setStretchFactor(2, 1)
+
+        self.splitter.setCollapsible(0, True)   # Barra lateral puede colapsarse
         self.splitter.setCollapsible(1, False)  # La lista nunca debe colapsar a 0
         self.splitter.setCollapsible(2, False)  # El editor NUNCA debe colapsar a 0
         
-        # Proporciones iniciales: Sidebar (200), Lista (280), Editor (480)
+        # Proporciones iniciales: Sidebar (~220), Lista (~300), Editor (~restante)
         splitter_state = self.settings.value("splitter")
         if splitter_state:
             self.splitter.restoreState(splitter_state)
             sizes = self.splitter.sizes()
-            # Validar que ningún panel crítico haya quedado con ancho 0 o colapsado en QSettings
-            if len(sizes) == 3 and (sizes[2] < 200 or sizes[1] < 150):
-                self.splitter.setSizes([200, 280, 480])
+            # Validar que respeten los rangos permitidos
+            if len(sizes) == 3 and (sizes[2] < 200 or sizes[1] < 260 or sizes[1] > 360 or sizes[0] > 260):
+                total = sum(sizes) if sum(sizes) > 600 else 1100
+                self.splitter.setSizes([220, 300, max(400, total - 520)])
                 self.settings.setValue("splitter", self.splitter.saveState())
         else:
-            self.splitter.setSizes([200, 280, 480])
+            self.splitter.setSizes([220, 300, 580])
+
+        self.splitter.setHandleWidth(1)
 
         self.setCentralWidget(self.splitter)
 
@@ -836,6 +913,10 @@ class NerdNotesApp(QMainWindow):
         self.editor_texto.setEnabled(False)
         self._cargando_texto = False
         self.lbl_titulo_actual.setText("Sin nota seleccionada")
+        self.lbl_titulo_actual.setEnabled(False)
+        self.lbl_titulo_actual.setReadOnly(True)
+        if hasattr(self, "lbl_metadata_nota"):
+            self.lbl_metadata_nota.setText("")
         self.lbl_contador.setText("0 palabras | 0 caracteres")
         self.btn_preview.setEnabled(False)
         self.btn_preview.setChecked(False)
@@ -994,6 +1075,24 @@ class NerdNotesApp(QMainWindow):
         self.lbl_titulo_actual.setText(titulo)
 
         es_papelera = (self.filtro_categoria == "papelera")
+        self.lbl_titulo_actual.setEnabled(True)
+        self.lbl_titulo_actual.setReadOnly(es_papelera or self.modo_preview)
+
+        # Actualizar barra sutil de metadatos
+        partes_meta = []
+        try:
+            import datetime
+            mtime = self.ruta_actual.stat().st_mtime
+            fecha_str = datetime.datetime.fromtimestamp(mtime).strftime("%d/%m/%Y %H:%M")
+            partes_meta.append(f"Modificado: {fecha_str}")
+        except Exception:
+            pass
+        etiquetas = storage.extraer_etiquetas(contenido)
+        if etiquetas:
+            partes_meta.append(f"Etiquetas: {', '.join(etiquetas)}")
+        if hasattr(self, "lbl_metadata_nota"):
+            self.lbl_metadata_nota.setText("  •  ".join(partes_meta) if partes_meta else "")
+
         self.editor_texto.setEnabled(True)
         self.editor_texto.setPlaceholderText("")
         self.btn_preview.setEnabled(not es_papelera)
@@ -1029,6 +1128,31 @@ class NerdNotesApp(QMainWindow):
             cursor = self.editor_texto.textCursor()
             cursor.movePosition(QTextCursor.MoveOperation.End)
             self.editor_texto.setTextCursor(cursor)
+
+    def _al_editar_titulo_nota(self):
+        if not self.ruta_actual or self.filtro_categoria == "papelera" or self.modo_preview:
+            return
+        nuevo_titulo = self.lbl_titulo_actual.text().strip()
+        if not nuevo_titulo or nuevo_titulo == "Sin nota seleccionada":
+            return
+        titulo_actual, _ = storage.obtener_metadatos(self.ruta_actual)
+        if nuevo_titulo == titulo_actual:
+            return
+
+        if self.modificado:
+            self.guardar_nota(silencioso=True)
+
+        self._ignorando_watcher = True
+        try:
+            nueva_ruta = storage.renombrar_nota(self.ruta_actual, nuevo_titulo)
+        finally:
+            self._ignorando_watcher = False
+
+        if nueva_ruta:
+            self.ruta_actual = nueva_ruta
+            self._actualizar_titulo_ventana()
+            self.cargar_lista_notas(seleccionar_ruta=nueva_ruta)
+            self.statusBar().showMessage(f"Nota renombrada a '{nuevo_titulo}'.", 2500)
 
     # --- BÚSQUEDA Y FILTRADO CON DEBOUNCE (~250ms) Y TRABAJADOR EN HILO ---
     def al_cambiar_busqueda(self):

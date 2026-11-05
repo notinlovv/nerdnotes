@@ -6,13 +6,17 @@ import config
 
 # Soporte opcional para PyQt6 para no romper ejecución de CLI en entornos sin interfaz
 try:
-    from PyQt6.QtWidgets import QTextEdit
+    from PyQt6.QtWidgets import QTextEdit, QLineEdit
     from PyQt6.QtCore import QTimer, pyqtSignal, QObject
+    from PyQt6.QtGui import QTextBlockFormat, QTextCursor
     _PYQT6_DISPONIBLE = True
 except (ImportError, TypeError, AttributeError):
     _PYQT6_DISPONIBLE = False
     QTextEdit = object
+    QLineEdit = object
     QObject = object
+    QTextBlockFormat = object
+    QTextCursor = object
     def pyqtSignal(*args, **kwargs):
         class _DummySignal:
             def connect(self, *a, **k): pass
@@ -62,6 +66,21 @@ def editar_nota(ruta: Path) -> None:
     abrir_editor(ruta)
 
 
+class NoteTitleEdit(QLineEdit):
+    """
+    Campo de título plano y sin bordes, con tipografía grande (18pt a 20pt, negrita).
+    """
+    def __init__(self, parent=None):
+        if _PYQT6_DISPONIBLE:
+            super().__init__(parent)
+            self.setObjectName("editor_titulo")
+            self.setPlaceholderText("Título de la nota...")
+            font = self.font()
+            font.setPointSize(18)
+            font.setBold(True)
+            self.setFont(font)
+
+
 class NoteEditor(QTextEdit):
     """
     Componente de edición de notas con soporte para autoguardado inteligente,
@@ -77,6 +96,8 @@ class NoteEditor(QTextEdit):
     def __init__(self, parent=None, callback_guardar: Optional[Callable[[str], bool]] = None, intervalo_ms: int = 500):
         if _PYQT6_DISPONIBLE:
             super().__init__(parent)
+            self.document().setDocumentMargin(24)
+            self._aplicar_formato_interlineado()
         self.callback_guardar = callback_guardar
         self._is_dirty: bool = False
         self._ignorando_cambios: bool = False
@@ -87,6 +108,28 @@ class NoteEditor(QTextEdit):
         if _PYQT6_DISPONIBLE:
             self.autosave_timer.timeout.connect(self._al_timeout_autosave)
             self.textChanged.connect(self._al_cambiar_texto)
+
+    def setPlainText(self, text: str):
+        if _PYQT6_DISPONIBLE:
+            super().setPlainText(text)
+            self._aplicar_formato_interlineado()
+
+    def _aplicar_formato_interlineado(self):
+        if not _PYQT6_DISPONIBLE:
+            return
+        try:
+            cursor = self.textCursor()
+            pos = cursor.position()
+            cursor.beginEditBlock()
+            bf = QTextBlockFormat()
+            bf.setLineHeight(140, QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
+            cursor.select(QTextCursor.SelectionType.Document)
+            cursor.setBlockFormat(bf)
+            cursor.endEditBlock()
+            cursor.setPosition(min(pos, len(self.toPlainText())))
+            self.setTextCursor(cursor)
+        except Exception:
+            pass
 
     @property
     def is_dirty(self) -> bool:
@@ -228,3 +271,4 @@ class AutoSaveDebouncer(QObject):
 Editor = NoteEditor
 AutoSaveEditor = NoteEditor
 EditorController = AutoSaveDebouncer
+TitleEdit = NoteTitleEdit
