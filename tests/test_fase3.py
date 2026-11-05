@@ -17,6 +17,7 @@ from main_gui import NerdNotesApp
 from ui.notes_model import NotesListModel, NotesFilterProxyModel, NoteRoles, extraer_vista_previa
 from ui.note_delegate import NoteCardDelegate
 from services.icon_service import get_icon
+from editor import NoteEditor, AutoSaveDebouncer
 
 app = QApplication.instance() or QApplication(["test", "-platform", "offscreen"])
 
@@ -42,6 +43,8 @@ class TestFase3(unittest.TestCase):
     def tearDown(self):
         self.gui.modificado = False
         self.gui.close()
+        self.gui.deleteLater()
+        app.processEvents()
         config.NOTES_DIR = self.original_notes_dir
         config.TRASH_DIR = self.original_trash_dir
         config.CONFIG_FILE = self.original_config_file
@@ -236,6 +239,170 @@ class TestFase3(unittest.TestCase):
         # En orden ascendente, la desconocida también debe ir al final
         self.assertEqual(ordenadas_asc[0], p_normal)
         self.assertEqual(ordenadas_asc[1], p_desconocida)
+
+    def test_autoguardado_debouncing_500ms_una_sola_escritura(self):
+        # 1. Probar debouncing en NoteEditor directamente
+        guardados = []
+        editor = NoteEditor(callback_guardar=lambda c: (guardados.append(c), True)[1], intervalo_ms=500)
+        self.assertEqual(editor.autosave_timer.interval(), 500)
+        self.assertTrue(editor.autosave_timer.isSingleShot())
+
+        editor.setPlainText("Hola")
+        self.assertTrue(editor.is_dirty)
+        self.assertTrue(editor.autosave_timer.isActive())
+        self.assertEqual(len(guardados), 0)
+
+        editor.setPlainText("Hola mundo")
+        self.assertTrue(editor.autosave_timer.isActive())
+        self.assertEqual(len(guardados), 0)
+
+        editor.setPlainText("Hola mundo final")
+        self.assertEqual(len(guardados), 0)
+
+        # Al disparar el temporizador tras agotar el debounce
+        editor.autosave_timer.timeout.emit()
+        self.assertEqual(len(guardados), 1)
+        self.assertEqual(guardados[0], "Hola mundo final")
+        self.assertFalse(editor.is_dirty)
+        self.assertFalse(editor.autosave_timer.isActive())
+
+        # 2. Probar debouncing en NerdNotesApp
+        guardados_gui = []
+        with patch.object(self.gui, "guardar_nota", side_effect=lambda silencioso=False: (guardados_gui.append(True), True)[1]):
+            self.gui.editor_texto.setPlainText("Paso 1")
+            self.gui.editor_texto.setPlainText("Paso 2")
+            self.gui.editor_texto.setPlainText("Paso 3")
+            self.assertEqual(len(guardados_gui), 0)
+            self.assertTrue(self.gui.is_dirty)
+
+            self.gui.autosave_timer.timeout.emit()
+            self.assertEqual(len(guardados_gui), 1)
+
+    def test_flush_guarda_inmediatamente_sin_esperar_temporizador(self):
+        # 1. NoteEditor flush directo
+        guardados = []
+        editor = NoteEditor(callback_guardar=lambda c: (guardados.append(c), True)[1], intervalo_ms=500)
+        editor.setPlainText("Texto a guardar ya")
+        self.assertTrue(editor.is_dirty)
+        self.assertTrue(editor.autosave_timer.isActive())
+
+        exito = editor.flush()
+        self.assertTrue(exito)
+        self.assertFalse(editor.is_dirty)
+        self.assertFalse(editor.autosave_timer.isActive())
+        self.assertEqual(guardados, ["Texto a guardar ya"])
+
+        # 2. NerdNotesApp flush inmediato
+        self.gui.editor_texto.setPlainText("Texto modificado en GUI")
+        self.assertTrue(self.gui.is_dirty)
+        self.assertTrue(self.gui.autosave_timer.isActive())
+
+        exito_gui = self.gui.flush()
+        self.assertTrue(exito_gui)
+        self.assertFalse(self.gui.is_dirty)
+        self.assertFalse(self.gui.autosave_timer.isActive())
+
+        # Verificar que la nota en disco fue actualizada con el contenido
+        contenido_disco = self.gui.ruta_actual.read_text(encoding="utf-8")
+        self.assertEqual(contenido_disco, "Texto modificado en GUI")
+
+    def test_flush_en_cambio_de_nota_y_creacion(self):
+        # Crear una segunda nota
+        nota2 = storage.crear_nota("Segunda Nota", "Contenido 2")
+        self.gui.cargar_lista_notas(seleccionar_ruta=self.gui.ruta_actual)
+
+        # Modificar nota actual sin esperar al timer
+        self.gui.editor_texto.setPlainText("Contenido antes de cambiar")
+        self.assertTrue(self.gui.is_dirty)
+
+        # Cambiar a la segunda nota
+        idx2 = self.gui.proxy_model.find_proxy_index_by_path(nota2)
+        self.gui._al_cambiar_seleccion_lista(idx2, self.gui.lista_notas.currentIndex())
+
+        # La primera nota debió guardarse automáticamente en disco
+        nota1_path = [p for p in storage.listar_notas() if p != nota2][0]
+        self.assertEqual(nota1_path.read_text(encoding="utf-8"), "Contenido antes de cambiar")
+
+    def test_indicador_dirty_state(self):
+        # Estado inicial limpio
+        self.assertFalse(self.gui.is_dirty)
+        self.assertFalse(self.gui.ha_cambiado)
+        self.assertNotIn("• ", self.gui.windowTitle())
+        self.assertEqual(self.gui.lbl_estado_guardado.text(), "Guardado")
+
+        # Al escribir, pasa a dirty
+        self.gui.editor_texto.setPlainText("Cambio pendiente")
+        self.assertTrue(self.gui.is_dirty)
+        self.assertTrue(self.gui.ha_cambiado)
+        self.assertTrue(self.gui.windowTitle().startswith("• "))
+        self.assertEqual(self.gui.lbl_estado_guardado.text(), "• Modificado")
+
+        # Al guardar (flush), vuelve a estado limpio
+        self.gui.flush()
+        self.assertFalse(self.gui.is_dirty)
+        self.assertFalse(self.gui.ha_cambiado)
+        self.assertNotIn("• ", self.gui.windowTitle())
+        self.assertEqual(self.gui.lbl_estado_guardado.text(), "Guardado")
+
+    def test_atajos_teclado_activan_slots(self):
+        self.gui.show()
+        app.setActiveWindow(self.gui)
+
+        # Localizar shortcuts de la ventana
+        shortcuts = self.gui.findChildren(QShortcut)
+        shortcut_map = {s.key().toString(): s for s in shortcuts}
+
+        # Ctrl+S debe invocar flush / guardar_nota_inmediata
+        self.assertIn("Ctrl+S", shortcut_map)
+        with patch.object(self.gui, "flush", return_value=True) as mock_flush:
+            shortcut_map["Ctrl+S"].activated.emit()
+            mock_flush.assert_called_once()
+            self.assertEqual(self.gui.statusBar().currentMessage(), "Nota guardada")
+
+        # Ctrl+N debe invocar crear_nueva_nota
+        self.assertIn("Ctrl+N", shortcut_map)
+        with patch("main_gui.NuevaNotaDialog") as mock_dialog:
+            mock_dialog.return_value.exec.return_value = 0
+            shortcut_map["Ctrl+N"].activated.emit()
+            mock_dialog.assert_called_once()
+
+        # Ctrl+F debe mover el foco al buscador
+        self.assertIn("Ctrl+F", shortcut_map)
+        shortcut_map["Ctrl+F"].activated.emit()
+        self.assertTrue(self.gui.buscador.hasFocus())
+
+        # Ctrl+B y Ctrl+\ deben alternar la barra lateral (animar_sidebar)
+        self.assertIn("Ctrl+B", shortcut_map)
+        self.assertIn("Ctrl+\\", shortcut_map)
+        self.gui.anim_sidebar = None
+        shortcut_map["Ctrl+B"].activated.emit()
+        self.assertIsNotNone(self.gui.anim_sidebar)
+
+        self.gui.anim_sidebar = None
+        shortcut_map["Ctrl+\\"].activated.emit()
+        self.assertIsNotNone(self.gui.anim_sidebar)
+
+        # Esc en el buscador debe limpiarlo y enfocar lista o editor
+        self.gui.buscador.setText("busqueda_de_prueba")
+        self.gui.buscador.setFocus()
+        self.assertEqual(self.gui.buscador.text(), "busqueda_de_prueba")
+        esc_shortcuts = self.gui.buscador.findChildren(QShortcut)
+        self.assertTrue(len(esc_shortcuts) > 0)
+        esc_shortcuts[0].activated.emit()
+        self.assertEqual(self.gui.buscador.text(), "")
+        self.assertTrue(self.gui.lista_notas.hasFocus() or self.gui.editor_texto.hasFocus())
+
+        # Supr (Del) y Ctrl+D en la lista de notas deben llamar a eliminar_nota_seleccionada
+        idx0 = self.gui.lista_notas.model().index(0, 0)
+        self.gui.lista_notas.setCurrentIndex(idx0)
+
+        list_shortcuts = {s.key().toString(): s for s in self.gui.lista_notas.findChildren(QShortcut)}
+        self.assertIn("Del", list_shortcuts)
+        self.assertIn("Ctrl+D", list_shortcuts)
+        with patch("storage.mover_a_papelera", return_value=None) as mock_trash:
+            list_shortcuts["Del"].activated.emit()
+            list_shortcuts["Ctrl+D"].activated.emit()
+            self.assertEqual(mock_trash.call_count, 2)
 
 
 if __name__ == "__main__":

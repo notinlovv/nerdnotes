@@ -27,6 +27,7 @@ from ui.notes_model import NoteItem, NoteRoles, NotesListModel, NotesFilterProxy
 from ui.notes_list_view import NotesListView
 from ui.search_worker import SearchWorker
 from ui.tag_dialogs import MultiCompleterLineEdit, EditarEtiquetasDialog, NuevaNotaDialog
+from editor import NoteEditor
 
 class NerdNotesApp(QMainWindow):
     solicitar_busqueda = pyqtSignal(list, str, object, int)  # (notas, query, tag_filtro, query_id)
@@ -55,10 +56,10 @@ class NerdNotesApp(QMainWindow):
         # Tamaño de fuente del editor
         self.font_size = int(self.settings.value("font_size", 14))
 
-        # --- TIMER DE AUTOGUARDADO (Debounce ~800ms) ---
+        # --- TIMER DE AUTOGUARDADO (Debounce ~500ms) ---
         self.autosave_timer = QTimer(self)
         self.autosave_timer.setSingleShot(True)
-        self.autosave_timer.setInterval(800)
+        self.autosave_timer.setInterval(500)
         self.autosave_timer.timeout.connect(self._ejecutar_autoguardado)
 
         # --- BÚSQUEDA EN SEGUNDO PLANO Y DEBOUNCE (~250ms) ---
@@ -250,10 +251,14 @@ class NerdNotesApp(QMainWindow):
         layout_editor.addLayout(layout_herramientas_editor)
 
         # Área de edición
-        self.editor_texto = QTextEdit()
+        self.editor_texto = NoteEditor(callback_guardar=lambda contenido: self.guardar_nota(silencioso=True), intervalo_ms=500)
         self.editor_texto.setObjectName("editor_texto")
+        self.autosave_timer = self.editor_texto.autosave_timer
+        self.autosave_timer.timeout.connect(self._ejecutar_autoguardado)
+        self.editor_texto.autoguardado_realizado.connect(lambda: self.statusBar().showMessage("Autoguardado", 1500))
         self._aplicar_tamano_fuente(self.font_size)
         self.editor_texto.textChanged.connect(self.al_modificar_texto)
+        self.editor_texto.ha_cambiado.connect(self._al_cambiar_dirty_state)
         layout_editor.addWidget(self.editor_texto, 1)
 
         # Configurar tamaños mínimos para evitar colapso a ancho 0
@@ -310,6 +315,10 @@ class NerdNotesApp(QMainWindow):
         self.lbl_contador.setObjectName("lbl_contador")
         self.statusBar().addPermanentWidget(self.lbl_contador)
 
+        self.lbl_estado_guardado = QLabel("Guardado")
+        self.lbl_estado_guardado.setObjectName("lbl_estado_guardado")
+        self.statusBar().addPermanentWidget(self.lbl_estado_guardado)
+
         # QFileSystemWatcher sobre NOTES_DIR (con debounce ~400ms)
         self._ignorando_watcher = False
         self.watcher = QFileSystemWatcher(self)
@@ -346,20 +355,27 @@ class NerdNotesApp(QMainWindow):
         # F2 para renombrar nota seleccionada
         QShortcut(QKeySequence("F2"), self, self.renombrar_nota_seleccionada)
         
-        # Delete: limitado exclusivamente al foco en la lista de notas (WidgetWithChildrenShortcut)
+        # Delete y Ctrl+D: limitado exclusivamente al foco en la lista de notas (WidgetWithChildrenShortcut)
         shortcut_del = QShortcut(QKeySequence.StandardKey.Delete, self.lista_notas)
         shortcut_del.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         shortcut_del.activated.connect(self.eliminar_nota_seleccionada)
+
+        shortcut_ctrl_d = QShortcut(QKeySequence("Ctrl+D"), self.lista_notas)
+        shortcut_ctrl_d.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        shortcut_ctrl_d.activated.connect(self.eliminar_nota_seleccionada)
 
         # Ctrl+Shift+P para alternar vista previa Markdown
         QShortcut(QKeySequence("Ctrl+Shift+P"), self, self.alternar_vista_previa)
         # Ctrl+T para cambiar de tema
         QShortcut(QKeySequence("Ctrl+T"), self, self.cambiar_tema_con_animacion)
-        # Ctrl+\ para colapsar/expandir barra lateral (libera Ctrl+B para negrita en Fase B)
+        # Ctrl+\ y Ctrl+B para colapsar/expandir barra lateral
         QShortcut(QKeySequence("Ctrl+\\"), self, self.animar_sidebar)
+        QShortcut(QKeySequence("Ctrl+B"), self, self.animar_sidebar)
+
+        # Esc en el buscador para limpiar y enfocar lista o editor
+        QShortcut(QKeySequence("Esc"), self.buscador, self._escape_buscador)
         
         # Formato Markdown sobre selección o palabra actual (manteniendo undo/redo)
-        QShortcut(QKeySequence("Ctrl+B"), self, lambda: self.aplicar_formato_markdown("negrita"))
         QShortcut(QKeySequence("Ctrl+I"), self, lambda: self.aplicar_formato_markdown("cursiva"))
         QShortcut(QKeySequence("Ctrl+1"), self, lambda: self.aplicar_formato_markdown("h1"))
         QShortcut(QKeySequence("Ctrl+2"), self, lambda: self.aplicar_formato_markdown("h2"))
@@ -386,12 +402,18 @@ class NerdNotesApp(QMainWindow):
         self.settings.setValue("font_size", self.font_size)
         self.statusBar().showMessage(f"Tamaño de fuente: {self.font_size} pt", 2000)
 
+    def _escape_buscador(self):
+        self.buscador.clear()
+        if hasattr(self, "lista_notas") and self.lista_notas.count() > 0:
+            self.lista_notas.setFocus()
+        elif hasattr(self, "editor_texto"):
+            self.editor_texto.setFocus()
+
     def eventFilter(self, obj, event):
-        # Esc en el buscador lo limpia y devuelve el foco a la lista
+        # Esc en el buscador lo limpia y devuelve el foco a la lista o al editor
         if obj == self.buscador and event.type() == QEvent.Type.KeyPress:
             if event.key() == Qt.Key.Key_Escape:
-                self.buscador.clear()
-                self.lista_notas.setFocus()
+                self._escape_buscador()
                 return True
         return super().eventFilter(obj, event)
 
@@ -668,7 +690,60 @@ class NerdNotesApp(QMainWindow):
         self.btn_restaurar.setVisible(es_papelera)
         self.btn_vaciar_papelera.setVisible(es_papelera)
 
-    # --- AUTOGUARDADO Y EDICIÓN ---
+    # --- AUTOGUARDADO, ESTADO SUCIO Y EDICIÓN ---
+    @property
+    def is_dirty(self) -> bool:
+        return self.modificado
+
+    @is_dirty.setter
+    def is_dirty(self, valor: bool):
+        self.modificado = bool(valor)
+        if hasattr(self, "editor_texto") and hasattr(self.editor_texto, "_is_dirty"):
+            self.editor_texto._is_dirty = bool(valor)
+        self._actualizar_indicador_dirty(bool(valor))
+
+    @property
+    def ha_cambiado(self) -> bool:
+        return self.modificado
+
+    @ha_cambiado.setter
+    def ha_cambiado(self, valor: bool):
+        self.is_dirty = valor
+
+    def _al_cambiar_dirty_state(self, sucio: bool):
+        self.modificado = sucio
+        self._actualizar_indicador_dirty(sucio)
+
+    def _actualizar_indicador_dirty(self, sucio: bool):
+        if hasattr(self, "lbl_estado_guardado"):
+            self.lbl_estado_guardado.setText("• Modificado" if sucio else "Guardado")
+        self._actualizar_titulo_ventana()
+
+    def _actualizar_titulo_ventana(self):
+        prefijo = "• " if self.modificado else ""
+        titulo = self.lbl_titulo_actual.text() if hasattr(self, "lbl_titulo_actual") else ""
+        if titulo and titulo != "Sin nota seleccionada":
+            self.setWindowTitle(f"{prefijo}{titulo} - NerdNotes")
+        else:
+            self.setWindowTitle(f"{prefijo}NerdNotes")
+
+    def flush(self) -> bool:
+        """Fuerza el guardado inmediato de cambios pendientes deteniendo el temporizador."""
+        if hasattr(self, "autosave_timer") and self.autosave_timer.isActive():
+            self.autosave_timer.stop()
+        if hasattr(self, "editor_texto") and hasattr(self.editor_texto, "autosave_timer") and self.editor_texto.autosave_timer.isActive():
+            self.editor_texto.autosave_timer.stop()
+
+        if self.modificado and self.ruta_actual and (self.filtro_categoria != "papelera") and not self.modo_preview:
+            exito = self.guardar_nota(silencioso=True)
+            if exito:
+                self.modificado = False
+                if hasattr(self, "editor_texto") and hasattr(self.editor_texto, "_is_dirty"):
+                    self.editor_texto._is_dirty = False
+                self._actualizar_indicador_dirty(False)
+            return exito
+        return True
+
     def al_modificar_texto(self):
         self._actualizar_contador()
 
@@ -676,12 +751,15 @@ class NerdNotesApp(QMainWindow):
             return
 
         self.modificado = True
+        if hasattr(self, "editor_texto") and hasattr(self.editor_texto, "_is_dirty"):
+            self.editor_texto._is_dirty = True
+        self._actualizar_indicador_dirty(True)
 
         query = self.buscador.text().strip()
         if query:
             self.resaltar_coincidencias(query)
 
-        self.autosave_timer.start(800)
+        self.autosave_timer.start(500)
 
     def _actualizar_contador(self):
         texto = self.editor_texto.toPlainText()
@@ -694,11 +772,11 @@ class NerdNotesApp(QMainWindow):
             exito = self.guardar_nota(silencioso=True)
             if exito:
                 self.statusBar().showMessage("Autoguardado", 1500)
+                self._actualizar_indicador_dirty(False)
 
     def guardar_nota_inmediata(self):
-        if self.autosave_timer.isActive():
-            self.autosave_timer.stop()
-        if self.guardar_nota(silencioso=False):
+        exito = self.flush()
+        if exito:
             self.statusBar().showMessage("Nota guardada", 2500)
 
     def guardar_nota(self, silencioso: bool = False) -> bool:
@@ -714,6 +792,9 @@ class NerdNotesApp(QMainWindow):
 
         if exito:
             self.modificado = False
+            if hasattr(self, "editor_texto") and hasattr(self.editor_texto, "_is_dirty"):
+                self.editor_texto._is_dirty = False
+            self._actualizar_indicador_dirty(False)
             # Refrescar vista previa del ítem
             row = self.notes_model.find_row_by_path(self.ruta_actual)
             if row >= 0:
@@ -880,11 +961,9 @@ class NerdNotesApp(QMainWindow):
         if nueva_ruta == self.ruta_actual and self.ruta_actual is not None:
             return
 
-        # Guardar en silencio antes de cambiar de nota (respetando autosave sin diálogo contradictorio)
+        # Guardar en silencio (flush) antes de cambiar de nota
         if self.modificado and self.ruta_actual and not (self.filtro_categoria == "papelera") and not self.modo_preview:
-            if self.autosave_timer.isActive():
-                self.autosave_timer.stop()
-            exito = self.guardar_nota(silencioso=True)
+            exito = self.flush()
             if not exito:
                 QMessageBox.warning(self, "Error al guardar", "No se pudieron guardar los cambios en la nota.")
 
@@ -931,6 +1010,11 @@ class NerdNotesApp(QMainWindow):
         self._cargando_texto = False
 
         self.modificado = False
+        if hasattr(self, "editor_texto") and hasattr(self.editor_texto, "_is_dirty"):
+            self.editor_texto._is_dirty = False
+        if self.autosave_timer.isActive():
+            self.autosave_timer.stop()
+        self._actualizar_indicador_dirty(False)
         self._actualizar_contador()
 
         query = self.buscador.text().strip()
@@ -1021,8 +1105,7 @@ class NerdNotesApp(QMainWindow):
             self.nav_list.setCurrentRow(0)
 
         if self.modificado and self.ruta_actual and not self.modo_preview:
-            self.autosave_timer.stop()
-            self.guardar_nota(silencioso=True)
+            self.flush()
 
         etiquetas = []
         if isinstance(QInputDialog.getText, MagicMock):
@@ -1484,16 +1567,14 @@ class NerdNotesApp(QMainWindow):
 
     # --- EVENTO DE CIERRE ---
     def closeEvent(self, event):
-        if self.autosave_timer.isActive():
-            self.autosave_timer.stop()
         if self.timer_watcher.isActive():
             self.timer_watcher.stop()
         if self.timer_deshacer.isActive():
             self.timer_deshacer.stop()
 
-        # Guardar en silencio y avisar solo si falla
+        # Guardar en silencio cambios pendientes mediante flush() y avisar solo si falla
         if self.modificado and self.ruta_actual and (self.filtro_categoria != "papelera") and not self.modo_preview:
-            exito = self.guardar_nota(silencioso=True)
+            exito = self.flush()
             if not exito:
                 resp = QMessageBox.warning(
                     self, "Error al guardar",
@@ -1503,6 +1584,8 @@ class NerdNotesApp(QMainWindow):
                 if resp != QMessageBox.StandardButton.Yes:
                     event.ignore()
                     return
+        else:
+            self.flush()
 
         self.settings.setValue("geometria", self.saveGeometry())
         sizes = self.splitter.sizes()
