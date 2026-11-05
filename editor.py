@@ -96,7 +96,7 @@ def editar_nota(ruta: Path) -> None:
 
 class NoteTitleEdit(QLineEdit):
     """
-    Campo de título plano y sin bordes, con tipografía grande (18pt a 20pt, negrita).
+    Campo de título plano y sin bordes, con tipografía 1080p (22px, semi-bold 600).
     Sincroniza su cambio con storage al presionar Enter o perder foco.
     """
     def __init__(self, parent=None):
@@ -105,8 +105,8 @@ class NoteTitleEdit(QLineEdit):
             self.setObjectName("editor_titulo")
             self.setPlaceholderText("Título de la nota...")
             font = self.font()
-            font.setPointSize(18)
-            font.setBold(True)
+            font.setPixelSize(22)
+            font.setWeight(QFont.Weight.DemiBold)
             self.setFont(font)
 
     def keyPressEvent(self, event):
@@ -172,7 +172,7 @@ class NoteEditor(QTextEdit):
             pos = cursor.position()
             cursor.beginEditBlock()
             bf = QTextBlockFormat()
-            bf.setLineHeight(140, QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
+            bf.setLineHeight(160, QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
             cursor.select(QTextCursor.SelectionType.Document)
             cursor.setBlockFormat(bf)
             cursor.endEditBlock()
@@ -546,6 +546,8 @@ class NoteFormatToolbar(QWidget if _PYQT6_DISPONIBLE else object):
         btn.setToolTip(tooltip)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        btn.setFixedHeight(28)
+        btn.setMinimumWidth(28)
 
         font = btn.font()
         font.setPointSize(11)
@@ -564,11 +566,27 @@ class NoteFormatToolbar(QWidget if _PYQT6_DISPONIBLE else object):
         sep.setFrameShape(QFrame.Shape.VLine)
         sep.setFrameShadow(QFrame.Shadow.Plain)
         sep.setFixedWidth(1)
+        sep.setFixedHeight(14)
         return sep
 
     def _aplicar(self, tipo: str):
         if self.editor and hasattr(self.editor, "aplicar_formato"):
             self.editor.aplicar_formato(tipo)
+
+
+class NoteEditorCanvas(QWidget if _PYQT6_DISPONIBLE else object):
+    """
+    Contenedor centrado de lectura y escritura para NoteEditor.
+    Confinado entre 760px y 840px (800px por defecto) para optimizar
+    la longitud de línea de lectura (65-80 caracteres) en pantallas 1080p.
+    """
+    MAX_CANVAS_WIDTH = 800
+
+    def __init__(self, parent=None, max_width: int = 800):
+        if _PYQT6_DISPONIBLE:
+            super().__init__(parent)
+            self.setObjectName("container_documento")
+            self.setMaximumWidth(max_width)
 
 
 class AutoSaveDebouncer(QObject):
@@ -635,3 +653,5 @@ EditorController = AutoSaveDebouncer
 TitleEdit = NoteTitleEdit
 FormatToolbar = NoteFormatToolbar
 MarkdownToolbar = NoteFormatToolbar
+EditorCanvas = NoteEditorCanvas
+NoteDocumentContainer = NoteEditorCanvas

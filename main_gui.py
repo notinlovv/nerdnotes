@@ -27,7 +27,7 @@ from ui.notes_model import NoteItem, NoteRoles, NotesListModel, NotesFilterProxy
 from ui.notes_list_view import NotesListView
 from ui.search_worker import SearchWorker
 from ui.tag_dialogs import MultiCompleterLineEdit, EditarEtiquetasDialog, NuevaNotaDialog
-from editor import NoteEditor, NoteTitleEdit, NoteFormatToolbar
+from editor import NoteEditor, NoteTitleEdit, NoteFormatToolbar, NoteEditorCanvas
 
 class NerdNotesApp(QMainWindow):
     solicitar_busqueda = pyqtSignal(list, str, object, int)  # (notas, query, tag_filtro, query_id)
@@ -53,8 +53,8 @@ class NerdNotesApp(QMainWindow):
         if self.tema_actual not in ("dark", "light"):
             self.tema_actual = "dark"
 
-        # Tamaño de fuente del editor
-        self.font_size = int(self.settings.value("font_size", 14))
+        # Tamaño de fuente del editor (15pt escala 1080p)
+        self.font_size = int(self.settings.value("font_size", 15))
 
         # --- TIMER DE AUTOGUARDADO (Debounce ~500ms) ---
         self.autosave_timer = QTimer(self)
@@ -295,9 +295,7 @@ class NerdNotesApp(QMainWindow):
         layout_editor_body.setContentsMargins(0, 0, 0, 0)
         layout_editor_body.setSpacing(0)
 
-        container_doc = QWidget()
-        container_doc.setObjectName("container_documento")
-        container_doc.setMaximumWidth(800)
+        container_doc = NoteEditorCanvas(max_width=800)
         layout_doc = QVBoxLayout(container_doc)
         layout_doc.setContentsMargins(28, 18, 28, 16)
         layout_doc.setSpacing(2)
@@ -500,7 +498,7 @@ class NerdNotesApp(QMainWindow):
 
     def _cambiar_zoom(self, delta: int):
         if delta == 0:
-            self.font_size = 14
+            self.font_size = 15
         else:
             self.font_size = max(8, min(36, self.font_size + delta))
         self._aplicar_tamano_fuente(self.font_size)
@@ -656,20 +654,24 @@ class NerdNotesApp(QMainWindow):
     def animar_sidebar(self):
         ancho_actual = self.widget_sidebar.width()
         ocultar = (ancho_actual > 20)
-        fin = 0 if ocultar else 200
+        fin = 0 if ocultar else 220
+
+        if not ocultar:
+            self.widget_sidebar.setMinimumWidth(0)
 
         self.anim_sidebar = QPropertyAnimation(self.widget_sidebar, b"maximumWidth")
-        self.anim_sidebar.setDuration(220)
-        self.anim_sidebar.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        self.anim_sidebar.setDuration(180)
+        self.anim_sidebar.setEasingCurve(QEasingCurve.Type.InOutQuad)
         self.anim_sidebar.setStartValue(ancho_actual)
         self.anim_sidebar.setEndValue(fin)
 
         def al_terminar():
             if not ocultar:
-                self.widget_sidebar.setMaximumWidth(16777215)
-                self.widget_sidebar.setMinimumWidth(120)
+                self.widget_sidebar.setMinimumWidth(180)
+                self.widget_sidebar.setMaximumWidth(260)
             else:
                 self.widget_sidebar.setMinimumWidth(0)
+                self.widget_sidebar.setMaximumWidth(0)
 
         self.anim_sidebar.finished.connect(al_terminar)
         self.anim_sidebar.start()
@@ -735,8 +737,26 @@ class NerdNotesApp(QMainWindow):
 
     def _actualizar_indicador_dirty(self, sucio: bool):
         if hasattr(self, "lbl_estado_guardado"):
+            texto_anterior = self.lbl_estado_guardado.text()
             self.lbl_estado_guardado.setText("• Modificado" if sucio else "Guardado")
+            if not sucio and texto_anterior != "Guardado":
+                self._animar_feedback_guardado()
         self._actualizar_titulo_ventana()
+
+    def _animar_feedback_guardado(self):
+        if not hasattr(self, "lbl_estado_guardado"):
+            return
+        try:
+            effect = QGraphicsOpacityEffect(self.lbl_estado_guardado)
+            self.lbl_estado_guardado.setGraphicsEffect(effect)
+            self.anim_guardado = QPropertyAnimation(effect, b"opacity")
+            self.anim_guardado.setDuration(200)
+            self.anim_guardado.setStartValue(0.2)
+            self.anim_guardado.setEndValue(1.0)
+            self.anim_guardado.setEasingCurve(QEasingCurve.Type.InOutQuad)
+            self.anim_guardado.start()
+        except Exception:
+            pass
 
     def _actualizar_titulo_ventana(self):
         prefijo = "• " if self.modificado else ""

@@ -1,6 +1,6 @@
 /* NerdNotes - Dark Theme (Refined & Modern) */
 * {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Ubuntu, "Helvetica Neue", sans-serif;
+    font-family: 'Inter', 'Noto Sans', 'Segoe UI', 'Ubuntu', sans-serif;
     font-size: 13px;
     color: #d4d4d8;
     outline: none;
@@ -89,13 +89,13 @@ QLineEdit:focus {
     background-color: #26262b;
 }
 
-/* Campo de título grande H1 sin bordes para el editor */
+/* Campo de título grande H1 sin bordes para el editor (22px semi-bold) */
 QLineEdit#editor_titulo {
     background-color: transparent;
     border: none;
     color: #f4f4f5;
     font-size: 22px;
-    font-weight: bold;
+    font-weight: 600;
     padding: 0px;
     min-height: 36px;
     max-height: 36px;
@@ -152,7 +152,7 @@ QTextEdit {
     background-color: transparent;
     color: #d4d4d8;
     border: none;
-    font-size: 14px;
+    font-size: 15px;
     selection-background-color: #264f78;
 }
 
@@ -321,19 +321,19 @@ QStatusBar {
 
 #lbl_metadata_nota {
     color: #71717a;
-    font-size: 11px;
+    font-size: 12px;
     padding: 2px 0px 6px 0px;
 }
 
 #lbl_contador {
     color: #71717a;
-    font-size: 11px;
+    font-size: 12px;
     padding-right: 12px;
 }
 
 #lbl_estado_guardado {
     color: #71717a;
-    font-size: 11px;
+    font-size: 12px;
     padding-right: 8px;
 }
 
@@ -365,30 +365,33 @@ QToolTip {
 /* --- Barra de Formato Markdown en Editor --- */
 #toolbar_formato {
     background-color: transparent;
-    margin-top: 2px;
-    margin-bottom: 4px;
+    margin-top: 4px;
+    margin-bottom: 6px;
 }
 
 #toolbar_formato QPushButton {
     background-color: transparent;
     color: #a1a1aa;
-    border: none;
-    border-radius: 4px;
+    border: 1px solid transparent;
+    border-radius: 5px;
     padding: 0px 8px;
-    height: 26px;
-    min-height: 26px;
-    max-height: 26px;
+    min-width: 28px;
+    height: 28px;
+    min-height: 28px;
+    max-height: 28px;
     font-size: 12px;
     font-weight: 500;
 }
 
 #toolbar_formato QPushButton:hover {
-    background-color: #2a2a2e;
+    background-color: #27272a;
     color: #f4f4f5;
+    border-color: #3f3f46;
 }
 
 #toolbar_formato QPushButton:pressed {
-    background-color: #323238;
+    background-color: #3f3f46;
+    color: #ffffff;
 }
 
 #toolbar_formato QPushButton:disabled {
@@ -399,7 +402,10 @@ QToolTip {
     background-color: #27272a;
     width: 1px;
     max-width: 1px;
-    margin: 3px 4px;
+    height: 14px;
+    min-height: 14px;
+    max-height: 14px;
+    margin: 7px 4px;
     border: none;
 }
 
