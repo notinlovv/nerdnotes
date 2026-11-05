@@ -165,6 +165,8 @@ class TestFase2GUI(unittest.TestCase):
     def tearDown(self):
         self.gui.modificado = False
         self.gui.close()
+        self.gui.deleteLater()
+        app.processEvents()
         config.NOTES_DIR = self.original_notes_dir
         config.TRASH_DIR = self.original_trash_dir
         config.CONFIG_FILE = self.original_config_file
@@ -259,6 +261,163 @@ class TestFase2GUI(unittest.TestCase):
         # Volver a notas activas (fila 0 de la lista de navegación)
         self.gui.nav_list.setCurrentRow(0)
         self.assertEqual(self.gui.lista_notas.count(), 1)
+
+
+class TestNoteIndexYSeguridadConcurrente(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.original_notes_dir = config.NOTES_DIR
+        self.original_trash_dir = config.TRASH_DIR
+        config.NOTES_DIR = Path(self.temp_dir.name)
+        config.TRASH_DIR = config.NOTES_DIR / ".papelera"
+        config.asegurar_directorio()
+        from services import note_index
+        note_index.limpiar()
+
+    def tearDown(self):
+        from services import note_index
+        note_index.limpiar()
+        config.NOTES_DIR = self.original_notes_dir
+        config.TRASH_DIR = self.original_trash_dir
+        self.temp_dir.cleanup()
+
+    def test_modificar_contenido_cambiando_mtime_recarga_cache(self):
+        from services import note_index
+        r = storage.crear_nota("Nota Inicial", "Cuerpo inicial de la nota")
+        self.assertIsNotNone(r)
+
+        # Indexación 1
+        nota1 = note_index.indexar_nota(r)
+        self.assertIsNotNone(nota1)
+        self.assertEqual(nota1.titulo, "Nota Inicial")
+        self.assertIn("Cuerpo inicial", nota1.contenido)
+
+        # Modificar archivo en disco forzando nuevo mtime
+        nuevo_contenido = "# Titulo Modificado\nFecha: 2026-11-05\n\nCuerpo modificado completamente"
+        r.write_text(nuevo_contenido, encoding="utf-8")
+        nuevo_mtime = nota1.mtime + 10.0
+        os.utime(r, (nuevo_mtime, nuevo_mtime))
+
+        # Indexación 2: Debe detectar el cambio de mtime y recargar
+        nota2 = note_index.indexar_nota(r)
+        self.assertIsNotNone(nota2)
+        self.assertEqual(nota2.titulo, "Titulo Modificado")
+        self.assertIn("Cuerpo modificado", nota2.contenido)
+        self.assertGreater(nota2.mtime, nota1.mtime)
+
+    def test_llamada_sucesiva_sin_cambios_no_lee_disco(self):
+        from services import note_index
+        r1 = storage.crear_nota("Nota Fria 1", "Contenido 1")
+        r2 = storage.crear_nota("Nota Fria 2", "Contenido 2")
+
+        # Carga fría (primera lectura)
+        notas_frias = note_index.sincronizar_indice(config.NOTES_DIR)
+        self.assertEqual(len(notas_frias), 2)
+
+        # Carga caliente (llamada sucesiva sin cambios):
+        # Ni open() ni read_text() deben invocarse para archivos ya cacheados
+        with patch.object(Path, "read_text", side_effect=AssertionError("read_text() no debe invocarse sin cambios")):
+            with patch("builtins.open", side_effect=AssertionError("open() no debe invocarse sin cambios")):
+                notas_calientes = note_index.sincronizar_indice(config.NOTES_DIR)
+                self.assertEqual(len(notas_calientes), 2)
+                self.assertEqual(notas_calientes[0].titulo, notas_frias[0].titulo)
+
+    def test_eliminar_archivo_fuera_elimina_entrada_en_siguiente_refresco(self):
+        from services import note_index
+        r1 = storage.crear_nota("Nota Permanente", "Texto permanente")
+        r2 = storage.crear_nota("Nota Para Borrar Fuera", "Texto a borrar")
+
+        note_index.sincronizar_indice(config.NOTES_DIR)
+        self.assertIsNotNone(note_index.obtener_nota(r1))
+        self.assertIsNotNone(note_index.obtener_nota(r2))
+
+        # Eliminar r2 directamente desde el sistema de archivos (fuera de la app)
+        r2.unlink()
+        self.assertFalse(r2.exists())
+
+        # En el siguiente refresco debe purgarse del índice
+        notas_refrescadas = note_index.sincronizar_indice(config.NOTES_DIR)
+        self.assertEqual(len(notas_refrescadas), 1)
+        self.assertIsNone(note_index.obtener_nota(r2))
+        self.assertIsNotNone(note_index.obtener_nota(r1))
+
+    def test_cancelacion_reactiva_search_worker(self):
+        from ui.search_worker import SearchWorker
+        from services import note_index
+        worker = SearchWorker()
+
+        # Probar banderas de interrupción
+        self.assertFalse(bool(worker.is_interrupted))
+        self.assertFalse(worker.is_interrupted())
+        worker.abortar()
+        self.assertTrue(bool(worker.is_interrupted))
+        self.assertTrue(worker.is_interrupted())
+
+        # Probar que si se cancela, no emite señal resultados_listos
+        worker_recibio_senal = []
+        worker.resultados_listos.connect(lambda matches, q, qid: worker_recibio_senal.append((matches, q, qid)))
+
+        r = storage.crear_nota("Nota Buscar", "Texto de prueba para worker")
+
+        # Búsqueda abortada a priori
+        worker.abortar()
+        worker.buscar([r], "Buscar", None, query_id=1)
+        self.assertEqual(len(worker_recibio_senal), 0)
+
+        # Búsqueda abortada dinámicamente en medio de la iteración
+        r2 = storage.crear_nota("Nota Buscar 2", "Segundo texto")
+        r3 = storage.crear_nota("Nota Buscar 3", "Tercer texto")
+        worker._abort = False
+
+        original_indexar = note_index.indexar_nota
+        def interrumpir_al_segundo(ruta):
+            if "Buscar_2" in ruta.name:
+                worker.abortar()
+            return original_indexar(ruta)
+
+        with patch("services.note_index.indexar_nota", side_effect=interrumpir_al_segundo):
+            worker.buscar([r, r2, r3], "Buscar", None, query_id=2)
+
+        # Como se abortó a la mitad, no debe emitir resultados
+        self.assertEqual(len(worker_recibio_senal), 0)
+
+        # Búsqueda limpia no abortada
+        worker._abort = False
+        worker.buscar([r], "Buscar", None, query_id=3)
+        self.assertEqual(len(worker_recibio_senal), 1)
+        self.assertEqual(worker_recibio_senal[0][2], 3)
+
+    def test_thread_safety_note_index(self):
+        import threading
+        from services import note_index
+
+        r = storage.crear_nota("Nota Concurrente", "Contenido inicial")
+        errores = []
+
+        def lector():
+            try:
+                for _ in range(50):
+                    note_index.indexar_nota(r)
+                    note_index.buscar("concurrente", [r])
+            except Exception as e:
+                errores.append(e)
+
+        def escritor():
+            try:
+                for i in range(50):
+                    note_index.actualizar(r, f"# Titulo {i}\nContenido {i}")
+            except Exception as e:
+                errores.append(e)
+
+        hilos = [threading.Thread(target=lector) for _ in range(3)] + \
+                [threading.Thread(target=escritor) for _ in range(2)]
+
+        for h in hilos:
+            h.start()
+        for h in hilos:
+            h.join()
+
+        self.assertEqual(len(errores), 0)
 
 
 if __name__ == "__main__":
