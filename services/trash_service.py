@@ -24,7 +24,8 @@ def listar_papelera() -> List[Path]:
 def mover_a_papelera(ruta: Path) -> Optional[Path]:
     """
     Mueve un archivo de nota a la papelera.
-    Si ya existe un archivo con el mismo nombre en la papelera, añade sufijo _2, _3...
+    Si ya existe un archivo con el mismo nombre en la papelera,
+    añade sufijo único (_1, _2...) para prevenir colisiones y pérdida de datos.
     """
     try:
         asegurar_papelera()
@@ -35,16 +36,23 @@ def mover_a_papelera(ruta: Path) -> Optional[Path]:
         desfijar_nota(ruta.name)
 
         nombre_base = ruta.stem
+        extension = ruta.suffix or config.EXTENSION
         destino = config.TRASH_DIR / ruta.name
-        contador = 2
+        contador = 1
         while destino.exists():
-            destino = config.TRASH_DIR / f"{nombre_base}_{contador}{config.EXTENSION}"
+            destino = config.TRASH_DIR / f"{nombre_base}_{contador}{extension}"
             contador += 1
 
         shutil.move(str(ruta), str(destino))
         from services import note_index
         note_index.invalidar(ruta)
         note_index.invalidar(destino)
+        try:
+            from services.search_service import invalidar_cache
+            invalidar_cache(ruta)
+            invalidar_cache(destino)
+        except ImportError:
+            pass
         return destino
     except Exception as e:
         print(f"Error al mover nota a papelera: {e}")
@@ -53,7 +61,7 @@ def mover_a_papelera(ruta: Path) -> Optional[Path]:
 def restaurar_nota_papelera(ruta_papelera: Path) -> Optional[Path]:
     """
     Restaura una nota desde la papelera a NOTES_DIR.
-    Si colisiona con una nota activa existente, añade sufijo _2, _3...
+    Si colisiona con una nota activa existente, añade sufijo _1, _2...
     """
     try:
         config.asegurar_directorio()
@@ -61,16 +69,23 @@ def restaurar_nota_papelera(ruta_papelera: Path) -> Optional[Path]:
             return None
 
         nombre_base = ruta_papelera.stem
+        extension = ruta_papelera.suffix or config.EXTENSION
         destino = config.NOTES_DIR / ruta_papelera.name
-        contador = 2
+        contador = 1
         while destino.exists():
-            destino = config.NOTES_DIR / f"{nombre_base}_{contador}{config.EXTENSION}"
+            destino = config.NOTES_DIR / f"{nombre_base}_{contador}{extension}"
             contador += 1
 
         shutil.move(str(ruta_papelera), str(destino))
         from services import note_index
         note_index.invalidar(ruta_papelera)
         note_index.invalidar(destino)
+        try:
+            from services.search_service import invalidar_cache
+            invalidar_cache(ruta_papelera)
+            invalidar_cache(destino)
+        except ImportError:
+            pass
         return destino
     except Exception as e:
         print(f"Error al restaurar nota desde papelera: {e}")

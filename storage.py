@@ -22,7 +22,9 @@ from services.search_service import (
 from services import note_index
 
 __all__ = [
+    "sanitizar_nombre",
     "sanear_nombre_archivo",
+    "escritura_atomica",
     "listar_notas",
     "obtener_metadatos",
     "crear_nota",
@@ -50,20 +52,32 @@ __all__ = [
 CARACTERES_INVALIDOS = r'[/\\:*?"<>|\x00-\x1f]'
 
 def escritura_atomica(ruta: Path, contenido: str, encoding: str = "utf-8") -> bool:
-    """Escribe contenido en un archivo temporal en el mismo directorio y lo renombra atómicamente."""
+    """
+    Escribe contenido en un archivo temporal en el mismo directorio (mismo filesystem),
+    fuerza la sincronización en disco con fsync y reemplaza el archivo destino
+    de forma atómica usando os.replace.
+    Si ocurre una excepción, limpia el archivo temporal.
+    """
     directorio = ruta.parent
     directorio.mkdir(parents=True, exist_ok=True)
+    tf = None
     temp_name = None
     try:
-        with tempfile.NamedTemporaryFile("w", dir=directorio, delete=False, encoding=encoding) as f:
-            f.write(contenido)
-            f.flush()
-            os.fsync(f.fileno())
-            temp_name = f.name
+        tf = tempfile.NamedTemporaryFile("w", dir=directorio, delete=False, encoding=encoding)
+        temp_name = tf.name
+        tf.write(contenido)
+        tf.flush()
+        os.fsync(tf.fileno())
+        tf.close()
         os.replace(temp_name, str(ruta))
         return True
     except Exception as e:
         print(f"Error en escritura atómica para {ruta.name}: {e}")
+        if tf and not tf.closed:
+            try:
+                tf.close()
+            except Exception:
+                pass
         if temp_name and os.path.exists(temp_name):
             try:
                 os.unlink(temp_name)
@@ -71,18 +85,42 @@ def escritura_atomica(ruta: Path, contenido: str, encoding: str = "utf-8") -> bo
                 pass
         return False
 
+def sanitizar_nombre(nombre: str, max_longitud: int = 100) -> str:
+    """
+    Sanitiza un nombre de archivo para evitar saltos de directorio y caracteres peligrosos.
+    - Remueve o reemplaza caracteres inválidos/peligrosos (/, \\, \0, :, *, ?, ", <, >, | y de control).
+    - Evita ataques o errores de salto de directorio (../).
+    - Limita la longitud máxima (100 caracteres por defecto).
+    - Asigna el fallback 'nota_sin_titulo' si el nombre resultante queda vacío.
+    """
+    if not nombre or not isinstance(nombre, str):
+        return "nota_sin_titulo"
+
+    # Reemplazar secuencias de saltos de directorio '..'
+    saneado = re.sub(r'\.{2,}', '_', nombre)
+    # Reemplazar caracteres prohibidos / inválidos
+    saneado = re.sub(CARACTERES_INVALIDOS, '_', saneado)
+    # Reemplazar espacios por guiones bajos
+    saneado = saneado.replace(' ', '_')
+    # Colapsar guiones bajos repetidos
+    saneado = re.sub(r'_+', '_', saneado)
+    # Quitar guiones bajos, puntos y espacios sobrantes de los extremos
+    saneado = saneado.strip('_. ')
+
+    # Limitar longitud máxima
+    if len(saneado) > max_longitud:
+        saneado = saneado[:max_longitud].rstrip('_. ')
+
+    if not saneado:
+        return "nota_sin_titulo"
+
+    return saneado
+
 def sanear_nombre_archivo(titulo: str) -> str:
     """
-    Sanea el título para usarlo como nombre de archivo seguro.
-    Reemplaza caracteres conflictivos por '_' y evita escapes de directorio.
+    Función de compatibilidad: sanea el título para usarlo como nombre de archivo seguro.
     """
-    saneado = re.sub(CARACTERES_INVALIDOS, '_', titulo)
-    saneado = saneado.replace(' ', '_')
-    saneado = re.sub(r'_+', '_', saneado)
-    saneado = saneado.strip('_. ')
-    if not saneado:
-        saneado = "nota"
-    return saneado
+    return sanitizar_nombre(titulo)
 
 def listar_notas() -> List[Path]:
     """
@@ -132,7 +170,7 @@ def crear_nota(titulo: str, contenido: str = "", etiquetas: Optional[List[str]] 
         ahora = datetime.now()
         fecha = ahora.strftime(config.DATE_FORMAT)
         
-        titulo_saneado = sanear_nombre_archivo(titulo)
+        titulo_saneado = sanitizar_nombre(titulo)
         base_nombre = f"{fecha}_{titulo_saneado}"
         nombre_archivo = f"{base_nombre}{config.EXTENSION}"
         ruta = config.NOTES_DIR / nombre_archivo
@@ -143,8 +181,9 @@ def crear_nota(titulo: str, contenido: str = "", etiquetas: Optional[List[str]] 
             ruta = config.NOTES_DIR / nombre_archivo
             contador += 1
 
+        titulo_encabezado = titulo if (titulo and titulo.strip()) else "nota_sin_titulo"
         linea_etiquetas = f"Etiquetas: {', '.join(etiquetas)}\n" if etiquetas else "Etiquetas:\n"
-        template = f"""# {titulo}
+        template = f"""# {titulo_encabezado}
 Fecha: {fecha}
 {linea_etiquetas}
 {contenido}
@@ -182,7 +221,7 @@ def renombrar_nota(ruta_actual: Path, nuevo_titulo: str) -> Optional[Path]:
         else:
             fecha = datetime.now().strftime(config.DATE_FORMAT)
 
-        titulo_saneado = sanear_nombre_archivo(nuevo_titulo)
+        titulo_saneado = sanitizar_nombre(nuevo_titulo)
         base_nombre = f"{fecha}_{titulo_saneado}"
         nuevo_nombre = f"{base_nombre}{config.EXTENSION}"
         nueva_ruta = config.NOTES_DIR / nuevo_nombre
